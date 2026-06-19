@@ -1,0 +1,115 @@
+# tidelog store tests: basic ops, recovery-equivalence after a clean reopen,
+# torn-tail crash recovery, log determinism, and binary/nested values.
+
+load_file of "src/cbor.eigs"
+load_file of "src/store.eigs"
+
+PASS is [0]
+FAIL is [0]
+
+define ok(cond, desc) as:
+    if cond:
+        PASS[0] is PASS[0] + 1
+    else:
+        FAIL[0] is FAIL[0] + 1
+        print of ("FAIL: " + desc)
+
+define file_size(path) as:
+    if file_exists of path:
+        return buf_len of (read_bytes_buf of path)
+    return 0
+
+# Simulate a crash that left the file with only its first n bytes.
+define truncate_file(path, n) as:
+    local buf is read_bytes_buf of path
+    local lst is []
+    for i in range of n:
+        append of [lst, buf_get of [buf, i]]
+    write_bytes of [path, lst, 0]
+
+define reset(path) as:
+    write_bytes of [path, [], 0]
+
+# === A. basic put / get / delete (in process) =============================
+A is "/tmp/tidelog_store_a.log"
+reset of A
+sa is store_open of A
+store_put of [sa, "alpha", 1]
+store_put of [sa, "beta", "two"]
+store_put of [sa, "gamma", [3, 3, 3]]
+ok of [store_get of [sa, "alpha"] == 1, "get alpha"]
+ok of [store_get of [sa, "beta"] == "two", "get beta"]
+ok of [store_get of [sa, "gamma"] == [3, 3, 3], "get gamma (list value)"]
+ok of [store_get of [sa, "missing"] == null, "get missing -> null"]
+store_put of [sa, "alpha", 100]                       # overwrite
+ok of [store_get of [sa, "alpha"] == 100, "overwrite alpha"]
+store_delete of [sa, "beta"]
+ok of [store_has of [sa, "beta"] == 0, "delete beta"]
+ok of [store_size of sa == 2, "size after delete"]
+
+# === B. recovery-equivalence: a fresh open replays to the same state ======
+sb is store_open of A
+ok of [store_get of [sb, "alpha"] == 100, "recovered alpha (latest value)"]
+ok of [store_has of [sb, "beta"] == 0, "recovered: beta stays deleted"]
+ok of [store_get of [sb, "gamma"] == [3, 3, 3], "recovered gamma"]
+ok of [store_size of sb == 2, "recovered size"]
+
+# === C. crash recovery: a torn trailing record is discarded ===============
+C is "/tmp/tidelog_store_c.log"
+reset of C
+sc is store_open of C
+store_put of [sc, "k1", "v1"]
+s1 is file_size of C
+store_put of [sc, "k2", "v2"]
+s2 is file_size of C
+store_put of [sc, "k3", "v3"]
+s3 is file_size of C
+
+# (i) truncate mid-third-record -> k3 torn away, k1/k2 survive
+truncate_file of [C, s2 + (floor of ((s3 - s2) / 2))]
+rc is store_open of C
+ok of [store_has of [rc, "k1"] == 1, "crash: k1 survives"]
+ok of [store_has of [rc, "k2"] == 1, "crash: k2 survives"]
+ok of [store_has of [rc, "k3"] == 0, "crash: torn k3 discarded"]
+
+# (ii) truncate at a clean record boundary -> exactly k1/k2
+truncate_file of [C, s2]
+rc2 is store_open of C
+ok of [store_size of rc2 == 2, "clean boundary: k1,k2 only"]
+ok of [store_has of [rc2, "k3"] == 0, "clean boundary: no k3"]
+
+# (iii) truncate mid-second-record -> only k1
+truncate_file of [C, s1 + (floor of ((s2 - s1) / 2))]
+rc3 is store_open of C
+ok of [store_size of rc3 == 1, "mid-record: only k1"]
+ok of [store_has of [rc3, "k1"] == 1, "mid-record: k1 intact"]
+
+# === D. determinism: same op sequence -> byte-identical log ===============
+D1 is "/tmp/tidelog_store_d1.log"
+D2 is "/tmp/tidelog_store_d2.log"
+reset of D1
+reset of D2
+define drive(path) as:
+    local s is store_open of path
+    store_put of [s, "x", 1]
+    store_put of [s, "y", {"nested": [1, 2, 3], "f": 2.5}]
+    store_delete of [s, "x"]
+    store_put of [s, "z", "hello"]
+drive of D1
+drive of D2
+ok of [(read_bytes_buf of D1) == (read_bytes_buf of D2), "log bytes are deterministic"]
+
+# === E. binary (NUL) + nested values round-trip through the log ===========
+E is "/tmp/tidelog_store_e.log"
+reset of E
+se is store_open of E
+NUL_VAL is buf_from_list of [0, 1, 2, 0, 255, 0]
+store_put of [se, "blob", NUL_VAL]
+store_put of [se, "doc", {"id": 7, "tags": ["a", "b"], "ratio": 0 - 1.25, "nil": null}]
+re is store_open of E
+ok of [(store_get of [re, "blob"]) == NUL_VAL, "binary value with NUL round-trips"]
+ok of [(store_get of [re, "doc"]) == {"id": 7, "tags": ["a", "b"], "ratio": 0 - 1.25, "nil": null}, "nested doc round-trips"]
+
+print of ("store: " + (str of PASS[0]) + " passed, " + (str of FAIL[0]) + " failed")
+if FAIL[0] > 0:
+    exit of 1

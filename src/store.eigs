@@ -1,0 +1,101 @@
+# tidelog store — a log-structured key/value store on top of the CBOR codec.
+#
+# Bitcask-style: the durable state IS an append-only log. Every put/delete
+# appends one record; an in-memory keydir holds the latest value per key;
+# opening a store replays the log to rebuild the keydir. There is no in-place
+# mutation of old bytes, so a crash can only ever corrupt the *trailing*
+# record — and recovery discards exactly that torn tail (the simplest crash
+# model: a crash = the process stops; recovery keeps the maximal prefix of
+# complete records).
+#
+# On-disk record framing:
+#
+#     [4-byte big-endian length] [length bytes of CBOR]
+#
+# The CBOR payload is an array: [op, key]            for a delete (op = 1)
+#                               [op, key, value]     for a put    (op = 0)
+#
+# The length prefix makes torn-tail detection trivial — a record is recoverable
+# iff its full frame is present — and means the CBOR decoder is only ever handed
+# complete records. CBOR carries arbitrary values (numbers, strings, NUL-bearing
+# binary via buffers, nested lists/dicts), so values are not limited to bytes.
+#
+# Determinism: the log bytes are a pure function of the op sequence (CBOR's
+# deterministic profile + no nondeterministic builtins), so the same operations
+# produce a byte-identical log in any process. read_bytes_buf is the only I/O on
+# the recovery path and is replay-safe under EIGS_TRACE/EIGS_REPLAY.
+
+OP_PUT is 0
+OP_DEL is 1
+
+# Convert a byte buffer (e.g. from read_bytes_buf) to a list of byte ints so the
+# CBOR decoder, which works over byte lists, can read it.
+define buf_to_list(b) as:
+    local out is []
+    for i in range of (buf_len of b):
+        append of [out, buf_get of [b, i]]
+    return out
+
+# Append one length-framed CBOR record to the log.
+define store_write_record(store, rec) as:
+    local payload is cbor_encode of rec
+    local frame is []
+    cbor_put_be of [frame, len of payload, 4]
+    for i in range of (len of payload):
+        append of [frame, payload[i]]
+    write_bytes of [store.path, frame, 1]   # append mode
+
+# Apply a decoded record to the in-memory keydir.
+define store_apply(store, rec) as:
+    if rec[0] == OP_PUT:
+        store.keydir[rec[1]] is rec[2]
+    else:
+        if has_key of [store.keydir, rec[1]]:
+            dict_remove of [store.keydir, rec[1]]
+
+# Replay the log bytes into the keydir, stopping at the first incomplete frame
+# (the torn tail of a crash). Returns the number of bytes in the clean prefix.
+define store_replay(store, bytes, total) as:
+    local cur is 0
+    loop while cur + 4 <= total:
+        local rlen is cbor_read_be of [bytes, cur, 4]
+        local payload is cur + 4
+        if payload + rlen > total:
+            break                            # incomplete trailing record
+        local dec is cbor_decode_at of [bytes, payload]
+        store_apply of [store, dec[0]]
+        cur is payload + rlen
+    return cur
+
+# --- public API ----------------------------------------------------------
+
+# Open (or create) a store at `path`, rebuilding the keydir from the log.
+define store_open(path) as:
+    local store is {"path": path, "keydir": {}}
+    if file_exists of path:
+        local buf is read_bytes_buf of path
+        store_replay of [store, buf_to_list of buf, buf_len of buf]
+    return store
+
+define store_put(store, key, value) as:
+    store_write_record of [store, [OP_PUT, key, value]]
+    store.keydir[key] is value
+
+define store_delete(store, key) as:
+    store_write_record of [store, [OP_DEL, key]]
+    if has_key of [store.keydir, key]:
+        dict_remove of [store.keydir, key]
+
+define store_get(store, key) as:
+    if has_key of [store.keydir, key]:
+        return store.keydir[key]
+    return null
+
+define store_has(store, key) as:
+    return has_key of [store.keydir, key]
+
+define store_keys(store) as:
+    return keys of store.keydir
+
+define store_size(store) as:
+    return len of (keys of store.keydir)

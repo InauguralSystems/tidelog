@@ -38,9 +38,12 @@ where it's a deliberate constraint. `FINDINGS.md` is a primary deliverable.
    - [x] byte strings (buffers, NUL-safe) + text strings (str)
    - [x] arrays, maps (deterministic key order), float64, null
    - [x] RFC 8949 Appendix A vectors + round-trip + canonical fixed-point
-2. **Store — append-only log-structured KV (Bitcask-style).** Every put/delete
-   appends a CBOR record to a log; an in-memory keydir holds the latest offset
-   per key; recovery = replay the log.
+2. **Store — append-only log-structured KV (Bitcask-style).** ✅ DONE.
+   `src/store.eigs`: each put/delete appends a length-framed CBOR record; an
+   in-memory keydir holds the latest value per key; `store_open` replays the log
+   to recover. Crash model: a torn trailing record is discarded, the clean
+   prefix survives. 21 checks (ops, recovery-equivalence, three crash-truncation
+   points, binary/nested values) + cross-process log determinism.
 3. **Durable determinism.** Crash injection mid-write + a recovery-equivalence
    oracle (recovered state == committed prefix), wired through
    `EIGS_TRACE`/`EIGS_REPLAY`, with the temporal interrogatives querying the

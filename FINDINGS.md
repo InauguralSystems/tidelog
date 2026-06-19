@@ -76,5 +76,30 @@ float64 — routing them to the integer path silently corrupted the low bytes
 
 ---
 
-*(Store-layer findings — append-only log, crash-recovery determinism — to be
-added as Phases 2–3 land.)*
+## F-STORE-1 — no binary-append file write — GAP → FIXED upstream (PR #249)
+
+The store appends binary CBOR records to a log, but the only file-write builtin
+was `write_text`: truncate-mode (`"w"`) and string-based (`strlen`), so it could
+neither append nor write a record containing a NUL byte. `write_bytes of [path,
+<list|buffer> {, append}]` (PR #249) writes raw bytes verbatim with an append
+flag, pairing with the existing `read_bytes_buf` for recovery. Suite 2050/2050,
+ASan-clean. The liferaft→#245 pattern a third time: a real missing primitive,
+added to the language.
+
+---
+
+## Store-layer determinism — BY-DESIGN (verified)
+
+The log bytes are a pure function of the operation sequence: CBOR's deterministic
+profile fixes each record's encoding, the 4-byte length frame is arithmetic, and
+the only I/O on the path (`read_bytes_buf`, `write_bytes`) touches no
+nondeterministic builtin. Verified: the same op sequence produces a
+byte-identical log across two fresh processes. This is the on-disk analog of
+liferaft's in-memory replay determinism, and the foundation for the Phase 3
+crash-recovery replay oracle.
+
+The crash model is the simplest sound one: a crash = the process stops, leaving
+the file with some byte prefix. Because the log is append-only, the only damage
+is a torn *trailing* record; recovery keeps the maximal prefix of complete
+length-framed records and discards the torn tail. Verified across three
+truncation points (mid-record, clean boundary, mid-earlier-record).
