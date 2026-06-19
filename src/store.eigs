@@ -53,38 +53,46 @@ define store_apply(store, rec) as:
         if has_key of [store.keydir, rec[1]]:
             dict_remove of [store.keydir, rec[1]]
 
-# Replay the log bytes into the keydir, stopping at the first incomplete frame
-# (the torn tail of a crash). Returns the number of bytes in the clean prefix.
-define store_replay(store, bytes, total) as:
+# Replay log bytes into the keydir, applying at most `maxrec` complete records
+# (maxrec < 0 = all). Stops at the first incomplete frame (the torn tail of a
+# crash) or once maxrec records are applied. Returns the number applied.
+define store_replay_upto(store, bytes, total, maxrec) as:
     local cur is 0
+    local n is 0
     loop while cur + 4 <= total:
+        if maxrec >= 0 and n >= maxrec:
+            break                            # reached requested version
         local rlen is cbor_read_be of [bytes, cur, 4]
         local payload is cur + 4
         if payload + rlen > total:
             break                            # incomplete trailing record
         local dec is cbor_decode_at of [bytes, payload]
         store_apply of [store, dec[0]]
+        n is n + 1
         cur is payload + rlen
-    return cur
+    return n
 
 # --- public API ----------------------------------------------------------
 
-# Open (or create) a store at `path`, rebuilding the keydir from the log.
+# Open (or create) a store at `path`, rebuilding the keydir from the log. Sets
+# store.version to the number of records recovered (the current version).
 define store_open(path) as:
-    local store is {"path": path, "keydir": {}}
+    local store is {"path": path, "keydir": {}, "version": 0}
     if file_exists of path:
         local buf is read_bytes_buf of path
-        store_replay of [store, buf_to_list of buf, buf_len of buf]
+        store.version is store_replay_upto of [store, buf_to_list of buf, buf_len of buf, 0 - 1]
     return store
 
 define store_put(store, key, value) as:
     store_write_record of [store, [OP_PUT, key, value]]
     store.keydir[key] is value
+    store.version is store.version + 1
 
 define store_delete(store, key) as:
     store_write_record of [store, [OP_DEL, key]]
     if has_key of [store.keydir, key]:
         dict_remove of [store.keydir, key]
+    store.version is store.version + 1
 
 define store_get(store, key) as:
     if has_key of [store.keydir, key]:
@@ -99,3 +107,24 @@ define store_keys(store) as:
 
 define store_size(store) as:
     return len of (keys of store.keydir)
+
+# --- temporal reads (time travel over the append-only history) ------------
+#
+# The log never overwrites old bytes, so every past state is still on disk.
+# "Version v" is the state after the first v records (v in 0..store.version);
+# version 0 is the empty store before any write. These reads replay a prefix of
+# the log — they are pure functions of (path, v), so the same query always
+# returns the same answer, and the present is just the read at v = version.
+
+# Open a read-only view of the store as it was at version `v`.
+define store_open_at(path, v) as:
+    local store is {"path": path, "keydir": {}, "version": 0}
+    if file_exists of path:
+        local buf is read_bytes_buf of path
+        store.version is store_replay_upto of [store, buf_to_list of buf, buf_len of buf, v]
+    return store
+
+# Value of `key` as of version `v` (null if absent then). The append-only log
+# makes this a genuine point-in-time read, not a guess.
+define store_get_at(path, key, v) as:
+    return store_get of [store_open_at of [path, v], key]

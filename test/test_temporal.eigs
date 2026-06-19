@@ -1,0 +1,64 @@
+# Temporal reads: time travel over the append-only history.
+#
+# The log never overwrites old bytes, so store_open_at / store_get_at can read
+# the store as of any past version by replaying a prefix. These are pure
+# functions of (path, version): a point-in-time read, not a reconstruction.
+
+load_file of "src/cbor.eigs"
+load_file of "src/store.eigs"
+
+PASS is [0]
+FAIL is [0]
+define ok(cond, desc) as:
+    if cond:
+        PASS[0] is PASS[0] + 1
+    else:
+        FAIL[0] is FAIL[0] + 1
+        print of ("FAIL: " + desc)
+
+P is "/tmp/tidelog_temporal.log"
+write_bytes of [P, [], 0]
+s is store_open of P
+
+# A known history. Version increments by one per write.
+store_put of [s, "x", 10]      # v1
+store_put of [s, "x", 20]      # v2  (overwrite)
+store_put of [s, "y", 99]      # v3
+store_delete of [s, "x"]       # v4  (delete)
+store_put of [s, "x", 30]      # v5  (resurrect)
+
+ok of [s.version == 5, "version after 5 writes"]
+
+# Point-in-time reads of x across its whole life.
+ok of [store_get_at of [P, "x", 0] == null, "x@0 (before anything) = null"]
+ok of [store_get_at of [P, "x", 1] == 10, "x@1 = 10"]
+ok of [store_get_at of [P, "x", 2] == 20, "x@2 = 20 (overwrite)"]
+ok of [store_get_at of [P, "x", 3] == 20, "x@3 unchanged"]
+ok of [store_get_at of [P, "x", 4] == null, "x@4 = null (deleted)"]
+ok of [store_get_at of [P, "x", 5] == 30, "x@5 = 30 (resurrected)"]
+
+# y appears at v3.
+ok of [store_get_at of [P, "y", 2] == null, "y@2 = null (not yet)"]
+ok of [store_get_at of [P, "y", 3] == 99, "y@3 = 99"]
+ok of [store_get_at of [P, "y", 5] == 99, "y@5 = 99 (still)"]
+
+# Full snapshots at each version.
+ok of [store_size of (store_open_at of [P, 0]) == 0, "snapshot v0 empty"]
+ok of [store_size of (store_open_at of [P, 3]) == 2, "snapshot v3 has x,y"]
+ok of [store_size of (store_open_at of [P, 4]) == 1, "snapshot v4 has only y"]
+v5 is store_open_at of [P, 5]
+ok of [store_size of v5 == 2, "snapshot v5 has x,y"]
+ok of [(store_get of [v5, "x"]) == 30, "snapshot v5 x = 30"]
+
+# The present is just the read at the latest version.
+ok of [store_get_at of [P, "x", s.version] == store_get of [s, "x"], "x@version == present x"]
+
+# Temporal reads are pure: the same query twice returns the same answer.
+ok of [store_get_at of [P, "x", 2] == store_get_at of [P, "x", 2], "temporal read is pure"]
+
+# Asking past the end clamps to the latest available version.
+ok of [store_get_at of [P, "x", 999] == 30, "v beyond end clamps to latest"]
+
+print of ("temporal: " + (str of PASS[0]) + " passed, " + (str of FAIL[0]) + " failed")
+if FAIL[0] > 0:
+    exit of 1

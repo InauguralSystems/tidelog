@@ -44,18 +44,29 @@ where it's a deliberate constraint. `FINDINGS.md` is a primary deliverable.
    to recover. Crash model: a torn trailing record is discarded, the clean
    prefix survives. 21 checks (ops, recovery-equivalence, three crash-truncation
    points, binary/nested values) + cross-process log determinism.
-3. **Durable determinism.** Crash injection mid-write + a recovery-equivalence
-   oracle (recovered state == committed prefix), wired through
-   `EIGS_TRACE`/`EIGS_REPLAY`, with the temporal interrogatives querying the
-   store's past state.
+3. **Durable determinism.** ✅ DONE.
+   - **Crash-injection sweep** (`test/test_crash_sweep.eigs`): truncate at every
+     byte offset across seeded op sequences (874 checks); recovery exactly equals
+     an independent replay of the surviving record prefix.
+   - **Replay oracle** (`test/replay.sh`): `EIGS_TRACE`/`EIGS_REPLAY` reproduces a
+     run byte-for-byte; the tape's only nondeterministic records are the file
+     reads (deterministic given its durable input).
+   - **Temporal reads** (`store_open_at` / `store_get_at`): time travel over the
+     append-only history — read the store as of any past version.
 
 ## Layout
 
-    src/cbor.eigs        CBOR codec
-    test/test_cbor.eigs  RFC vectors + round-trip
-    test/run.sh          full suite (honors $EIGS, default ./eigs)
-    eigs                 symlink to the EigenScript binary
-    FINDINGS.md          language findings surfaced by the port
+    src/cbor.eigs              CBOR codec
+    src/store.eigs            log-structured KV store + temporal reads
+    tidelog.eigs              CLI driver (deterministic workload, for replay)
+    test/test_cbor.eigs       RFC vectors + round-trip
+    test/test_store.eigs      ops, recovery, crash truncation
+    test/test_crash_sweep.eigs every-offset crash oracle
+    test/test_temporal.eigs   time-travel reads
+    test/replay.sh            EIGS_TRACE/EIGS_REPLAY byte-for-byte oracle
+    test/run.sh               full suite (honors $EIGS, default ./eigs)
+    eigs                      symlink to the EigenScript binary
+    FINDINGS.md               language findings surfaced by the port
 
 ## Running
 

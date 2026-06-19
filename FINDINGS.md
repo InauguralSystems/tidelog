@@ -101,5 +101,31 @@ crash-recovery replay oracle.
 The crash model is the simplest sound one: a crash = the process stops, leaving
 the file with some byte prefix. Because the log is append-only, the only damage
 is a torn *trailing* record; recovery keeps the maximal prefix of complete
-length-framed records and discards the torn tail. Verified across three
-truncation points (mid-record, clean boundary, mid-earlier-record).
+length-framed records and discards the torn tail. Verified by a crash-injection
+sweep that truncates at EVERY byte offset across several seeded op sequences
+(874 checks) and asserts recovery equals an independent in-memory replay of the
+surviving record prefix — exact at every possible crash point.
+
+Replay oracle (EIGS_TRACE / EIGS_REPLAY): a recorded run replays byte-for-byte
+across seeds. Unlike liferaft (pure seed → zero `N` tape records), tidelog's tape
+carries `N` records equal to its file reads — the file is legitimately
+nondeterministic *input*, and the tape captures exactly that boundary and nothing
+else. The claim is "deterministic given its durable input," proven by the
+identical replay.
+
+---
+
+## F-TEMPORAL-1 — native temporal interrogatives don't cover version history — CONSTRAINT
+
+EigenScript's temporal interrogatives (`prev of x`, `what is x at <line>`) record
+a *variable's assignment timeline*, keyed by the latest assignment / source line.
+That is a different axis from a persistent store's *version history* (records on
+disk), and the two don't compose into "value of key K as of version V." So
+tidelog implements time travel itself: `store_open_at(path, v)` / `store_get_at`
+replay a prefix of the append-only log. The log already carries the full history
+for free, and these reads are pure functions of (path, version).
+
+Not a defect — it marks the boundary of the observer/temporal system as a
+language-level observation tool rather than a general history API. Recorded so a
+future consumer doesn't expect `state_at`-style builtins to span durable
+application state.

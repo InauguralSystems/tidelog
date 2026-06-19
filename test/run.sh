@@ -20,6 +20,17 @@ unit "cbor codec" test/test_cbor.eigs "0 failed"
 echo "--- store (log-structured KV + crash recovery) ---"
 unit "store ops + recovery" test/test_store.eigs "0 failed"
 
+echo "--- durable determinism (crash sweep + temporal) ---"
+unit "crash-injection sweep (every byte offset)" test/test_crash_sweep.eigs "0 failed"
+unit "temporal reads (time travel)"               test/test_temporal.eigs   "0 failed"
+
+echo "--- replay (EIGS_TRACE / EIGS_REPLAY, byte-for-byte) ---"
+replay_ok=1
+for s in 1 7 42 12345 99999; do
+  if ! bash test/replay.sh "$s" 80 >/dev/null 2>&1; then echo "FAIL: replay seed=$s"; replay_ok=0; fail=1; fi
+done
+[ "$replay_ok" -eq 1 ] && echo "PASS: replay byte-for-byte (5 seeds x 80 ops)"
+
 echo "--- determinism (store log, two fresh processes byte-identical) ---"
 det_drv='load_file of "src/cbor.eigs"
 load_file of "src/store.eigs"

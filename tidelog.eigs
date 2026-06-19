@@ -1,0 +1,108 @@
+# tidelog CLI driver — a deterministic store workload, for the replay oracle and
+# as a worked example of the API.
+#
+#   eigenscript tidelog.eigs [--seed N] [--ops M] [--path FILE]
+#
+# Runs M pseudo-random put/delete operations (seed-derived) against a fresh log,
+# then prints a digest: the final version, the recovered key/value state in key
+# order, a few point-in-time (temporal) reads, and the full log as hex. The
+# output is a pure function of (seed, ops): the same arguments produce
+# byte-identical output in any process, which is what test/replay.sh checks.
+
+load_file of "src/cbor.eigs"
+load_file of "src/store.eigs"
+
+# ---- seeded PRNG (LCG in exact double arithmetic; no nondet builtins) ----
+PRNG_M is 4294967296
+PRNG_A is 1664525
+PRNG_C is 1013904223
+
+define rng_new(seed) as:
+    return [seed % PRNG_M]
+
+define rng_next(r) as:
+    r[0] is (PRNG_A * r[0] + PRNG_C) % PRNG_M
+    return r[0]
+
+# integer in [0, n), drawn from the high bits
+define rng_int(r, n) as:
+    return floor of ((rng_next of r) / PRNG_M * n)
+
+# ---- args ----
+seed is 1
+ops is 50
+path is "/tmp/tidelog_run.log"
+
+argv is args of null
+i is 0
+loop while i < (len of argv):
+    a is argv[i]
+    if a == "--seed":
+        seed is num of argv[i + 1]
+        i is i + 2
+    elif a == "--ops":
+        ops is num of argv[i + 1]
+        i is i + 2
+    elif a == "--path":
+        path is argv[i + 1]
+        i is i + 2
+    else:
+        i is i + 1
+
+# ---- workload ----
+write_bytes of [path, [], 0]                 # fresh log
+r is rng_new of seed
+pool is ["alpha", "beta", "gamma", "delta", "epsilon"]
+s is store_open of path
+
+opn is 0
+loop while opn < ops:
+    opn is opn + 1
+    k is pool[rng_int of [r, 5]]
+    act is rng_int of [r, 5]                  # 0..3 put, 4 delete
+    if act == 4:
+        store_delete of [s, k]
+    else:
+        kind is rng_int of [r, 3]
+        if kind == 0:
+            store_put of [s, k, rng_int of [r, 1000]]
+        elif kind == 1:
+            store_put of [s, k, "v" + (str of (rng_int of [r, 100]))]
+        else:
+            store_put of [s, k, {"n": rng_int of [r, 9], "tag": k}]
+
+# ---- digest (deterministic function of seed, ops) ----
+print of ("version " + (str of s.version))
+
+ks is store_keys of s
+# sort keys for a stable digest (keys-of is insertion order)
+n is len of ks
+ii is 0
+loop while ii < n:
+    jj is 0
+    loop while jj < n - 1:
+        if ks[jj] > ks[jj + 1]:
+            tmp is ks[jj]
+            ks[jj] is ks[jj + 1]
+            ks[jj + 1] is tmp
+        jj is jj + 1
+    ii is ii + 1
+
+for idx in range of (len of ks):
+    k is ks[idx]
+    print of (k + " = " + (str of (store_get of [s, k])))
+
+# a temporal probe: each pool key as of the midpoint version
+mid is floor of (s.version / 2)
+print of ("--- as of version " + (str of mid) + " ---")
+for idx in range of (len of pool):
+    print of (pool[idx] + "@mid = " + (str of (store_get_at of [path, pool[idx], mid])))
+
+# full log as hex — the on-disk truth
+HEXD is ["0","1","2","3","4","5","6","7","8","9","a","b","c","d","e","f"]
+buf is read_bytes_buf of path
+hexout is ""
+for idx in range of (buf_len of buf):
+    bb is buf_get of [buf, idx]
+    hexout is hexout + HEXD[floor of (bb / 16)] + HEXD[bb % 16]
+print of ("log " + hexout)

@@ -1,0 +1,104 @@
+# Crash-injection sweep: the strong durable-determinism oracle.
+#
+# For several seeded op sequences, truncate the log at EVERY byte offset and
+# assert that recovery yields exactly the state of an independent in-memory
+# replay of the records whose full frame survives the truncation. This proves
+# the torn-tail rule is correct at every possible crash point, not just a few.
+
+load_file of "src/cbor.eigs"
+load_file of "src/store.eigs"
+
+PRNG_M is 4294967296
+PRNG_A is 1664525
+PRNG_C is 1013904223
+define rng_new(seed) as:
+    return [seed % PRNG_M]
+define rng_next(r) as:
+    r[0] is (PRNG_A * r[0] + PRNG_C) % PRNG_M
+    return r[0]
+define rng_int(r, n) as:
+    return floor of ((rng_next of r) / PRNG_M * n)
+
+PASS is [0]
+FAIL is [0]
+define ok(cond, desc) as:
+    if cond:
+        PASS[0] is PASS[0] + 1
+    else:
+        FAIL[0] is FAIL[0] + 1
+        print of ("FAIL: " + desc)
+
+define file_size(path) as:
+    if file_exists of path:
+        return buf_len of (read_bytes_buf of path)
+    return 0
+
+define prefix_list(lst, t) as:
+    local out is []
+    for i in range of t:
+        append of [out, lst[i]]
+    return out
+
+# Independent oracle: apply the first v records to a fresh dict.
+define expected_state(records, v) as:
+    local d is {}
+    for i in range of v:
+        local rec is records[i]
+        if rec[0] == OP_PUT:
+            d[rec[1]] is rec[2]
+        else:
+            if has_key of [d, rec[1]]:
+                dict_remove of [d, rec[1]]
+    return d
+
+# Number of complete records whose frame ends at or before byte offset T.
+define version_at(ends, t) as:
+    local v is 0
+    for i in range of (len of ends):
+        if ends[i] <= t:
+            v is v + 1
+    return v
+
+# Build a seeded log; return [records, ends] (ends = cumulative byte length).
+define build_log(path, seed, ops) as:
+    write_bytes of [path, [], 0]
+    local r is rng_new of seed
+    local pool is ["a", "b", "c"]
+    local s is store_open of path
+    local records is []
+    local ends is []
+    local opn is 0
+    loop while opn < ops:
+        opn is opn + 1
+        local k is pool[rng_int of [r, 3]]
+        local act is rng_int of [r, 4]               # 0..2 put, 3 delete
+        if act == 3:
+            store_delete of [s, k]
+            append of [records, [OP_DEL, k]]
+        else:
+            local v is rng_int of [r, 50]
+            store_put of [s, k, v]
+            append of [records, [OP_PUT, k, v]]
+        append of [ends, file_size of path]
+    return [records, ends]
+
+define sweep_seed(path, seed, ops) as:
+    local be is build_log of [path, seed, ops]
+    local records is be[0]
+    local ends is be[1]
+    local full is buf_to_list of (read_bytes_buf of path)
+    local total is len of full
+    for t in range of (total + 1):
+        write_bytes of [path, prefix_list of [full, t], 0]   # crash at offset t
+        local rs is store_open of path
+        local v is version_at of [ends, t]
+        ok of [rs.version == v, "seed " + (str of seed) + " t=" + (str of t) + " version " + (str of rs.version) + "!=" + (str of v)]
+        ok of [(rs.keydir) == (expected_state of [records, v]), "seed " + (str of seed) + " t=" + (str of t) + " state"]
+
+P is "/tmp/tidelog_sweep.log"
+for seed in [1, 7, 42, 31415]:
+    sweep_seed of [P, seed, 12]
+
+print of ("crash sweep: " + (str of PASS[0]) + " passed, " + (str of FAIL[0]) + " failed")
+if FAIL[0] > 0:
+    exit of 1
