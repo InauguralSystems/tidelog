@@ -36,14 +36,18 @@ define buf_to_list(b) as:
         append of [out, buf_get of [b, i]]
     return out
 
-# Append one length-framed CBOR record to the log.
-define store_write_record(store, rec) as:
+# Length-frame one record: [4-byte BE length][CBOR payload].
+define store_frame(rec) as:
     local payload is cbor_encode of rec
     local frame is []
     cbor_put_be of [frame, len of payload, 4]
     for i in range of (len of payload):
         append of [frame, payload[i]]
-    write_bytes of [store.path, frame, 1]   # append mode
+    return frame
+
+# Append one length-framed CBOR record to the log.
+define store_write_record(store, rec) as:
+    write_bytes of [store.path, store_frame of rec, 1]   # append mode
 
 # Apply a decoded record to the in-memory keydir.
 define store_apply(store, rec) as:
@@ -128,3 +132,44 @@ define store_open_at(path, v) as:
 # makes this a genuine point-in-time read, not a guess.
 define store_get_at(path, key, v) as:
     return store_get of [store_open_at of [path, v], key]
+
+# --- compaction ----------------------------------------------------------
+#
+# Rewrite the log so it holds exactly one PUT per live key, dropping every
+# superseded put and every delete. The compacted log replays to the identical
+# keydir, so recovery is unaffected — it just shrinks the log and resets the
+# version to the live-key count. (Compaction collapses history, so temporal
+# reads only reach back to the compaction point afterward.)
+#
+# Crash safety rests on rename(2) being atomic: the new log is written to a temp
+# file, then swapped in with a single rename, so a crash at any instant leaves
+# either the complete old log or the complete new log on disk — never a torn
+# mix. Keys are emitted in sorted order, making the compacted log a deterministic
+# function of the live state: two stores with the same contents compact to
+# byte-identical logs, regardless of the histories that produced them.
+define store_compact(store) as:
+    local ks is keys of store.keydir
+    local n is len of ks
+    # sort keys ascending (deterministic compacted log)
+    local a is 0
+    loop while a < n:
+        local b is 0
+        loop while b < n - 1:
+            if ks[b] > ks[b + 1]:
+                local tmp is ks[b]
+                ks[b] is ks[b + 1]
+                ks[b + 1] is tmp
+            b is b + 1
+        a is a + 1
+    # build the whole compacted log in memory: one PUT per live key
+    local out is []
+    for i in range of n:
+        local frame is store_frame of [OP_PUT, ks[i], store.keydir[ks[i]]]
+        for j in range of (len of frame):
+            append of [out, frame[j]]
+    # write to a temp file, then atomically swap it in
+    local tmp_path is store.path + ".compact"
+    write_bytes of [tmp_path, out, 0]
+    rename of [tmp_path, store.path]
+    store.version is n
+    return n

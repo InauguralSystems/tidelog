@@ -129,3 +129,14 @@ Not a defect — it marks the boundary of the observer/temporal system as a
 language-level observation tool rather than a general history API. Recorded so a
 future consumer doesn't expect `state_at`-style builtins to span durable
 application state.
+
+---
+
+## F-STORE-2 — no atomic file replace / delete — GAP → FIXED upstream (PR #250)
+
+Crash-safe compaction needs an *atomic* swap: write the compacted log to a temp
+file, then replace the live log in one indivisible step so a crash can never
+leave a half-written log. EigenScript's file I/O was create/read/append-only —
+no rename, no delete. Added `rename of [old, new]` (atomic via `rename(2)`) and
+`remove_file of path` (PR #250). Suite 2062/2062, ASan-clean. The fourth
+primitive this port has driven into the language (after #248 ×2, #249).

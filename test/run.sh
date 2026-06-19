@@ -24,6 +24,9 @@ echo "--- durable determinism (crash sweep + temporal) ---"
 unit "crash-injection sweep (every byte offset)" test/test_crash_sweep.eigs "0 failed"
 unit "temporal reads (time travel)"               test/test_temporal.eigs   "0 failed"
 
+echo "--- compaction (drop superseded + crash-safe atomic swap) ---"
+unit "compaction"                                 test/test_compaction.eigs "0 failed"
+
 echo "--- replay (EIGS_TRACE / EIGS_REPLAY, byte-for-byte) ---"
 replay_ok=1
 for s in 1 7 42 12345 99999; do

@@ -53,6 +53,12 @@ where it's a deliberate constraint. `FINDINGS.md` is a primary deliverable.
      reads (deterministic given its durable input).
    - **Temporal reads** (`store_open_at` / `store_get_at`): time travel over the
      append-only history — read the store as of any past version.
+4. **Compaction** (`store_compact`): rewrite the log to one PUT per live key,
+   dropping superseded puts and deletes, then swap it in with an atomic
+   `rename` — crash-safe (a crash leaves either the old or new log whole). The
+   compacted log is a deterministic function of the live state. 15 checks
+   (state preserved, log shrinks, determinism, crash-safety on both sides of the
+   swap).
 
 ## Layout
 
@@ -63,6 +69,7 @@ where it's a deliberate constraint. `FINDINGS.md` is a primary deliverable.
     test/test_store.eigs      ops, recovery, crash truncation
     test/test_crash_sweep.eigs every-offset crash oracle
     test/test_temporal.eigs   time-travel reads
+    test/test_compaction.eigs compaction + crash-safe swap
     test/replay.sh            EIGS_TRACE/EIGS_REPLAY byte-for-byte oracle
     test/run.sh               full suite (honors $EIGS, default ./eigs)
     eigs                      symlink to the EigenScript binary

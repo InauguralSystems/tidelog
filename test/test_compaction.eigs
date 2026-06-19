@@ -1,0 +1,112 @@
+# Compaction: rewrite the log to drop superseded puts and deletes, with a
+# crash-safe atomic swap. The compacted log must replay to the identical state,
+# be smaller, and the swap point must be safe against a crash on either side.
+
+load_file of "src/cbor.eigs"
+load_file of "src/store.eigs"
+
+PASS is [0]
+FAIL is [0]
+define ok(cond, desc) as:
+    if cond:
+        PASS[0] is PASS[0] + 1
+    else:
+        FAIL[0] is FAIL[0] + 1
+        print of ("FAIL: " + desc)
+
+define file_size(path) as:
+    if file_exists of path:
+        return buf_len of (read_bytes_buf of path)
+    return 0
+
+# Snapshot a store's live state as a plain dict (for equality comparison).
+define snapshot(store) as:
+    local d is {}
+    local ks is keys of store.keydir
+    for i in range of (len of ks):
+        d[ks[i]] is store.keydir[ks[i]]
+    return d
+
+# === A. correctness: compaction preserves state and shrinks the log =======
+A is "/tmp/tidelog_compact_a.log"
+write_bytes of [A, [], 0]
+sa is store_open of A
+store_put of [sa, "x", 1]
+store_put of [sa, "x", 2]
+store_put of [sa, "x", 3]            # x overwritten twice (2 superseded)
+store_put of [sa, "y", "hello"]
+store_put of [sa, "z", [1, 2, 3]]
+store_delete of [sa, "z"]            # z created then deleted (both droppable)
+store_put of [sa, "w", {"k": "v"}]
+before_state is snapshot of sa
+before_size is file_size of A
+before_version is sa.version
+
+live is store_compact of sa
+ok of [live == 3, "compaction version = live key count (x,y,w)"]
+ok of [sa.version == 3, "store.version reset to live count"]
+ok of [(snapshot of sa) == before_state, "in-memory state unchanged by compaction"]
+ok of [(file_size of A) < before_size, "compacted log is smaller"]
+ok of [before_version == 7, "sanity: 7 records before compaction"]
+
+# recovery from the compacted log reproduces the exact state
+ra is store_open of A
+ok of [(snapshot of ra) == before_state, "recovered state == pre-compaction state"]
+ok of [ra.version == 3, "recovered version == live count"]
+ok of [store_get of [ra, "x"] == 3, "recovered x = latest (3)"]
+ok of [store_has of [ra, "z"] == 0, "deleted z stays gone after compaction"]
+
+# the store keeps working after compaction (appends go to the new log)
+store_put of [sa, "v2", 42]
+rb is store_open of A
+ok of [store_get of [rb, "v2"] == 42, "writes after compaction recover"]
+ok of [(snapshot of rb) == (snapshot of sa), "post-compaction state consistent"]
+
+# === B. determinism: same logical state -> byte-identical compacted log ===
+D1 is "/tmp/tidelog_compact_d1.log"
+D2 is "/tmp/tidelog_compact_d2.log"
+write_bytes of [D1, [], 0]
+write_bytes of [D2, [], 0]
+# reach {a:1, b:2, c:3} via two DIFFERENT histories
+s1 is store_open of D1
+store_put of [s1, "a", 9]
+store_put of [s1, "b", 2]
+store_put of [s1, "a", 1]
+store_put of [s1, "c", 3]
+store_compact of s1
+s2 is store_open of D2
+store_put of [s2, "c", 3]
+store_put of [s2, "a", 5]
+store_delete of [s2, "a"]
+store_put of [s2, "b", 2]
+store_put of [s2, "a", 1]
+store_compact of s2
+ok of [(read_bytes_buf of D1) == (read_bytes_buf of D2), "compaction is deterministic in the live state"]
+
+# === C. crash safety of the atomic swap ===================================
+# A crash can only land before or after the single rename. rename(2) is atomic,
+# so either way a complete log is on disk and recovery yields the same state.
+C is "/tmp/tidelog_compact_c.log"
+write_bytes of [C, [], 0]
+sc is store_open of C
+store_put of [sc, "p", 1]
+store_put of [sc, "p", 2]
+store_put of [sc, "q", 3]
+crash_state is snapshot of sc
+
+# (i) crash BEFORE rename: temp written, swap not done -> old log intact
+TMP is C + ".compact"
+write_bytes of [TMP, [42, 42, 42], 0]        # a stray temp from an aborted compaction
+rc1 is store_open of C
+ok of [(snapshot of rc1) == crash_state, "crash before swap: old log fully intact"]
+remove_file of TMP
+
+# (ii) crash AFTER rename: compacted log in place -> same state
+store_compact of sc
+rc2 is store_open of C
+ok of [(snapshot of rc2) == crash_state, "crash after swap: compacted log = same state"]
+ok of [file_exists of TMP == 0, "temp consumed by the swap (no leftover)"]
+
+print of ("compaction: " + (str of PASS[0]) + " passed, " + (str of FAIL[0]) + " failed")
+if FAIL[0] > 0:
+    exit of 1
