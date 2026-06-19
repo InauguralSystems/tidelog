@@ -1,9 +1,9 @@
 # CBOR codec tests — RFC 8949 Appendix A vectors + the round-trip property.
 #
 # Two oracles:
-#   1. External: encode(n) must equal the exact bytes the RFC publishes.
-#   2. Internal: decode(encode(n)) == n for every value, including ones whose
-#      shortest form spans 1/2/4/8 bytes (the >32-bit arithmetic path).
+#   1. External: encode(x) equals the exact bytes the RFC publishes.
+#   2. Internal: decode(encode(x)) == x  (EigenScript == deep-compares lists,
+#      dicts (order-independent), and buffers (content-sensitive)).
 
 load_file of "src/cbor.eigs"
 
@@ -22,24 +22,26 @@ PASS is [0]
 FAIL is [0]
 
 # Oracle 1: deterministic encoding matches the published bytes exactly.
-define expect_hex(n, want) as:
-    local got is bytes_to_hex of cbor_encode of n
+define expect_hex(v, want) as:
+    local got is bytes_to_hex of cbor_encode of v
     if got == want:
         PASS[0] is PASS[0] + 1
     else:
         FAIL[0] is FAIL[0] + 1
-        print of ("FAIL enc " + (str of n) + ": got " + got + " want " + want)
+        print of ("FAIL enc " + (str of v) + ": got " + got + " want " + want)
 
 # Oracle 2: round-trip through encode then decode.
-define expect_roundtrip(n) as:
-    local back is cbor_decode of cbor_encode of n
-    if back == n:
+define expect_roundtrip(v) as:
+    local back is cbor_decode of cbor_encode of v
+    if back == v:
         PASS[0] is PASS[0] + 1
     else:
         FAIL[0] is FAIL[0] + 1
-        print of ("FAIL roundtrip " + (str of n) + ": got " + (str of back))
+        print of ("FAIL roundtrip " + (str of v) + ": got " + (str of back))
 
-# --- RFC 8949 Appendix A: unsigned integers --------------------------------
+# === RFC 8949 Appendix A ===================================================
+
+# unsigned integers
 expect_hex of [0, "00"]
 expect_hex of [1, "01"]
 expect_hex of [10, "0a"]
@@ -51,7 +53,7 @@ expect_hex of [1000, "1903e8"]
 expect_hex of [1000000, "1a000f4240"]
 expect_hex of [1000000000000, "1b000000e8d4a51000"]
 
-# --- shortest-form boundaries (the determinism profile) --------------------
+# shortest-form boundaries (deterministic profile)
 expect_hex of [255, "18ff"]
 expect_hex of [256, "190100"]
 expect_hex of [65535, "19ffff"]
@@ -59,9 +61,77 @@ expect_hex of [65536, "1a00010000"]
 expect_hex of [4294967295, "1affffffff"]
 expect_hex of [4294967296, "1b0000000100000000"]
 
-# --- round-trips across all width tiers ------------------------------------
-for v in [0, 1, 23, 24, 100, 255, 256, 1000, 65535, 65536, 1000000, 4294967295, 4294967296, 1000000000000, 9007199254740991]:
+# negative integers
+expect_hex of [0 - 1, "20"]
+expect_hex of [0 - 10, "29"]
+expect_hex of [0 - 100, "3863"]
+expect_hex of [0 - 1000, "3903e7"]
+
+# floats (we always emit float64; integer-valued numbers go through the int path)
+expect_hex of [1.1, "fb3ff199999999999a"]
+expect_hex of [0 - 4.1, "fbc010666666666666"]
+expect_hex of [3.141592653589793, "fb400921fb54442d18"]
+
+# text strings
+expect_hex of ["", "60"]
+expect_hex of ["a", "6161"]
+expect_hex of ["IETF", "6449455446"]
+expect_hex of ["ü", "62c3bc"]
+
+# byte strings (buffers)
+expect_hex of [buf_from_list of [], "40"]
+expect_hex of [buf_from_list of [1, 2, 3, 4], "4401020304"]
+
+# arrays
+expect_hex of [[], "80"]
+expect_hex of [[1, 2, 3], "83010203"]
+expect_hex of [[1, [2, 3], [4, 5]], "8301820203820405"]
+
+# maps (keys in deterministic order)
+expect_hex of [{}, "a0"]
+expect_hex of [{"a": 1, "b": [2, 3]}, "a26161016162820203"]
+expect_hex of [{"a": "A", "b": "B", "c": "C", "d": "D", "e": "E"}, "a56161614161626142616361436164614461656145"]
+
+# null
+expect_hex of [null, "f6"]
+
+# deterministic map ordering must NOT depend on insertion order
+expect_hex of [{"b": [2, 3], "a": 1}, "a26161016162820203"]
+# bytewise-of-encoding order: "b" (head 0x61) sorts before "aa" (head 0x62)
+expect_hex of [{"aa": 1, "b": 2}, "a261620262616101"]
+
+# === round-trips across every type ========================================
+
+for v in [0, 1, 23, 24, 255, 65535, 4294967296, 1000000000000, 9007199254740991]:
     expect_roundtrip of v
+for v in [0 - 1, 0 - 24, 0 - 256, 0 - 1000000]:
+    expect_roundtrip of v
+for v in [1.1, 0 - 2.5, 3.141592653589793, 1.0e300, 1.0e-300, 100000.125]:
+    expect_roundtrip of v
+for v in ["", "a", "hello, world", "héllo wörld — UTF-8", "IETF"]:
+    expect_roundtrip of v
+expect_roundtrip of buf_from_list of [0, 1, 2, 254, 255]
+expect_roundtrip of [1, "two", 3.5, null, [4, 5], {"k": "v"}]
+expect_roundtrip of {"name": "raft", "term": 0 - 5, "log": [{"idx": 1}, {"idx": 2}], "ratio": 3.14, "done": null}
+
+# a buffer carrying NUL must round-trip byte-for-byte (the store's binary path)
+NUL_BUF is buf_from_list of [104, 105, 0, 98, 121, 116, 101, 0, 115]
+expect_roundtrip of NUL_BUF
+
+# Deterministic-encoding fixed point: re-encoding a decoded value yields the
+# SAME bytes (not just an equal value). This is the canonical-form guarantee
+# the store layer relies on, and the strongest determinism oracle the format has.
+define expect_canonical(v) as:
+    local e1 is cbor_encode of v
+    local e2 is cbor_encode of cbor_decode of e1
+    if e1 == e2:
+        PASS[0] is PASS[0] + 1
+    else:
+        FAIL[0] is FAIL[0] + 1
+        print of ("FAIL canonical " + (str of v) + ": " + (bytes_to_hex of e1) + " != " + (bytes_to_hex of e2))
+
+for v in [42, 0 - 7, 3.14, "mixed", {"z": 1, "a": 2, "m": [3, 4]}, [1, {"k": "v"}, null], {"b": [2, 3], "a": 1}]:
+    expect_canonical of v
 
 print of ("cbor: " + (str of PASS[0]) + " passed, " + (str of FAIL[0]) + " failed")
 if FAIL[0] > 0:

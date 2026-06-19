@@ -1,40 +1,48 @@
 # CBOR (RFC 8949) codec — implemented entirely in EigenScript.
 #
-# This is tidelog's serialization foundation: a deterministic byte format with
-# an authoritative external oracle (the RFC's Appendix A test vectors) plus the
+# tidelog's serialization foundation: a deterministic byte format with an
+# authoritative external oracle (the RFC's Appendix A test vectors) plus the
 # round-trip property decode(encode(x)) == x. CBOR's "deterministic encoding"
 # profile (RFC 8949 sec 4.2) requires exactly ONE canonical byte sequence per
-# value — every integer takes its shortest form — which makes the format itself
-# a determinism contract, the same property tidelog's store layer will rest on.
+# value, which makes the format itself a determinism contract — the same
+# property tidelog's store layer rests on.
 #
-# Encoded data is carried as a LIST of byte integers in [0, 255]. The format
-# layer never touches files or strings, so it sidesteps EigenScript's
-# C-terminated-string / NUL hazard until the store layer bridges to buffers.
+# Value mapping (EigenScript type -> CBOR major type):
+#   none (null)       -> 7 / simple 22 (0xf6)
+#   num, integer >= 0 -> 0  unsigned integer
+#   num, integer < 0  -> 1  negative integer (-1 - arg)
+#   num, non-integer  -> 7  float64 (0xfb + 8 IEEE-754 bytes)
+#   str               -> 3  text string  (raw UTF-8 bytes)
+#   buffer            -> 2  byte string  (arbitrary bytes, NUL-safe)
+#   list              -> 4  array
+#   dict              -> 5  map (keys emitted in deterministic order)
 #
-# CBOR's first byte packs a 3-bit major type in the high bits and a 5-bit
-# "additional info" argument in the low bits:
-#     byte = major * 32 + info        (major << 5 | info, expressed in arithmetic)
-# Major types implemented in this slice:
-#   0  unsigned integer
+# Encoded data is a LIST of byte integers in [0, 255]. Binary that may contain
+# NUL travels as a buffer (major 2); native strings (major 3) never contain NUL
+# (they are C-terminated), so they round-trip losslessly through str_from_bytes.
 #
-# THE >32-BIT NOTE: a CBOR argument can be a 64-bit integer. EigenScript's
-# bitwise operators are 32-bit, so multi-byte (de)serialization here uses pure
-# division/modulo arithmetic instead of shifts. Every value stays < 2^53, so
-# `% 256` and `floor(n / 256)` are exact integer ops on doubles. This is the
-# portable, exact way to handle widths the bitwise ops cannot reach. See
-# FINDINGS.md F-CBOR-1.
+# Booleans: EigenScript has no native bool type (true/false are numeric 1/0), so
+# encoding never emits CBOR simple true/false; decoding maps them to 1/0. Numbers
+# that happen to be integer-valued (e.g. 2.0) encode as integers — in a
+# value model with no int/float distinction, that is the deterministic choice.
+# EigenScript numbers are finite (no NaN/Inf), sidestepping CBOR float
+# canonicalization entirely.
+#
+# >32-BIT NOTE: a CBOR argument can be 64-bit. EigenScript bitwise is 32-bit, so
+# multi-byte integer coding here uses pure division/modulo arithmetic (exact for
+# values < 2^53). Float bytes use the f64_to_bytes / f64_from_bytes builtins
+# (added upstream for this codec). See FINDINGS.md F-CBOR-1 / F-CBOR-2.
 
 # --- low-level byte helpers ----------------------------------------------
 
-# Append the k low-order bytes of n to `out`, big-endian (most significant
-# first), via repeated div/mod so no power of 256 is ever materialized.
+# Append the k low-order bytes of n to `out`, big-endian, via repeated div/mod
+# so no power of 256 is ever materialized.
 define cbor_put_be(out, n, k) as:
     local tmp is []
     local rem is n
     for i in range of k:
         append of [tmp, rem % 256]
         rem is floor of (rem / 256)
-    # tmp is little-endian; emit reversed so the stream is big-endian.
     local j is (len of tmp) - 1
     loop while j >= 0:
         append of [out, tmp[j]]
@@ -49,8 +57,7 @@ define cbor_read_be(bytes, pos, k) as:
 
 # --- argument (head) coding ----------------------------------------------
 
-# Emit a CBOR head: major type + argument `n`, in the shortest (deterministic)
-# form. Used for unsigned ints now, and later for lengths of strings/arrays/maps.
+# Emit a CBOR head: major type + argument `n`, shortest (deterministic) form.
 define cbor_put_head(out, major, n) as:
     local base is major * 32
     if n <= 23:
@@ -68,7 +75,7 @@ define cbor_put_head(out, major, n) as:
         append of [out, base + 27]
         cbor_put_be of [out, n, 8]
 
-# Read a CBOR head's argument given the 5-bit `info` field. Returns [value, pos].
+# Read a head's argument given the 5-bit `info` field. Returns [value, pos].
 define cbor_read_arg(bytes, pos, info) as:
     if info <= 23:
         return [info, pos]
@@ -83,18 +90,105 @@ define cbor_read_arg(bytes, pos, info) as:
     print of "cbor: reserved additional-info"
     return [0, pos]
 
-# --- public codec ---------------------------------------------------------
+# --- deterministic map key ordering --------------------------------------
 
-# Encode a value to a fresh list of bytes. (This slice: non-negative integers.)
+# Bytewise lexicographic order on two byte lists (RFC 8949 sec 4.2.1).
+define cbor_bytes_less(a, b) as:
+    local la is len of a
+    local lb is len of b
+    local n is la
+    if lb < n:
+        n is lb
+    for i in range of n:
+        if a[i] != b[i]:
+            return a[i] < b[i]
+    return la < lb
+
+# Insertion sort of [encoded_key_bytes, key] pairs by encoded-key bytes.
+define cbor_sort_pairs(pairs) as:
+    local n is len of pairs
+    for i in range of n:
+        local j is i
+        loop while j > 0:
+            if cbor_bytes_less of [pairs[j][0], pairs[j - 1][0]]:
+                local tmp is pairs[j]
+                pairs[j] is pairs[j - 1]
+                pairs[j - 1] is tmp
+                j is j - 1
+            else:
+                break
+
+# --- encoders ------------------------------------------------------------
+
+# Integers are encoded as CBOR major 0/1 only when exactly representable as a
+# whole number (|v| <= 2^53-1). Larger integer-valued numbers (e.g. 1e300) are
+# whole but exceed the exact-integer range, so they go through float64 — encoding
+# them as a CBOR integer would silently corrupt the low bytes.
+CBOR_SAFE_INT is 9007199254740991   # 2^53 - 1
+
+define cbor_encode_num(out, v) as:
+    if (floor of v) == v and v <= CBOR_SAFE_INT and v >= (0 - CBOR_SAFE_INT):
+        if v >= 0:
+            cbor_put_head of [out, 0, v]
+        else:
+            cbor_put_head of [out, 1, (0 - v) - 1]
+    else:
+        append of [out, 7 * 32 + 27]          # 0xfb: float64
+        local fb is f64_to_bytes of v
+        for i in range of 8:
+            append of [out, fb[i]]
+
+define cbor_encode_text(out, s) as:
+    cbor_put_head of [out, 3, len of s]
+    for i in range of (len of s):
+        append of [out, ord of s[i]]
+
+define cbor_encode_bytes(out, b) as:
+    local n is buf_len of b
+    cbor_put_head of [out, 2, n]
+    for i in range of n:
+        append of [out, buf_get of [b, i]]
+
+define cbor_encode_map(out, d) as:
+    local ks is keys of d
+    local pairs is []
+    for i in range of (len of ks):
+        append of [pairs, [cbor_encode of ks[i], ks[i]]]
+    cbor_sort_pairs of pairs                   # deterministic key order
+    cbor_put_head of [out, 5, len of pairs]
+    for i in range of (len of pairs):
+        local kb is pairs[i][0]
+        for j in range of (len of kb):
+            append of [out, kb[j]]
+        cbor_encode_into of [out, d[pairs[i][1]]]
+
+# Encode `value` by appending its bytes to `out`.
+define cbor_encode_into(out, value) as:
+    local t is type of value
+    if t == "none":
+        append of [out, 7 * 32 + 22]           # 0xf6: null
+    elif t == "num":
+        cbor_encode_num of [out, value]
+    elif t == "str":
+        cbor_encode_text of [out, value]
+    elif t == "buffer":
+        cbor_encode_bytes of [out, value]
+    elif t == "list":
+        cbor_put_head of [out, 4, len of value]
+        for i in range of (len of value):
+            cbor_encode_into of [out, value[i]]
+    elif t == "dict":
+        cbor_encode_map of [out, value]
+    else:
+        print of ("cbor: cannot encode type " + t)
+
+# Encode a value to a fresh list of bytes.
 define cbor_encode(value) as:
     local out is []
     cbor_encode_into of [out, value]
     return out
 
-# Encode `value` by appending its bytes to `out`.
-define cbor_encode_into(out, value) as:
-    # This slice handles unsigned integers only; later slices branch on type.
-    cbor_put_head of [out, 0, value]
+# --- decoder -------------------------------------------------------------
 
 # Decode one value from `bytes` starting at `pos`. Returns [value, new_pos].
 define cbor_decode_at(bytes, pos) as:
@@ -102,10 +196,62 @@ define cbor_decode_at(bytes, pos) as:
     local major is floor of (b / 32)
     local info is b % 32
     pos is pos + 1
+
+    if major == 7:
+        if info == 20:
+            return [0, pos]                    # false -> 0 (no native bool)
+        if info == 21:
+            return [1, pos]                    # true  -> 1
+        if info == 22:
+            return [null, pos]                 # null
+        if info == 23:
+            return [null, pos]                 # undefined -> null
+        if info == 27:
+            local fb is []
+            for i in range of 8:
+                append of [fb, bytes[pos + i]]
+            return [f64_from_bytes of fb, pos + 8]
+        print of ("cbor: unsupported simple/float info " + (str of info))
+        return [null, pos]
+
+    # Every other major type starts with an argument.
+    local r is cbor_read_arg of [bytes, pos, info]
+    local arg is r[0]
+    local p is r[1]
+
     if major == 0:
-        return cbor_read_arg of [bytes, pos, info]
-    print of "cbor: unsupported major type"
-    return [null, pos]
+        return [arg, p]
+    if major == 1:
+        return [(0 - arg) - 1, p]
+    if major == 2:                             # byte string -> buffer
+        local buf is buffer of arg
+        for i in range of arg:
+            buf_set of [buf, i, bytes[p + i]]
+        return [buf, p + arg]
+    if major == 3:                             # text string -> str
+        local tb is []
+        for i in range of arg:
+            append of [tb, bytes[p + i]]
+        return [str_from_bytes of tb, p + arg]
+    if major == 4:                             # array -> list
+        local lst is []
+        for i in range of arg:
+            local e is cbor_decode_at of [bytes, p]
+            append of [lst, e[0]]
+            p is e[1]
+        return [lst, p]
+    if major == 5:                             # map -> dict
+        local d is {}
+        for i in range of arg:
+            local ke is cbor_decode_at of [bytes, p]
+            p is ke[1]
+            local ve is cbor_decode_at of [bytes, p]
+            p is ve[1]
+            d[ke[0]] is ve[0]
+        return [d, p]
+
+    print of ("cbor: unsupported major " + (str of major))
+    return [null, p]
 
 # Decode a single complete value from a byte list (ignores trailing bytes).
 define cbor_decode(bytes) as:

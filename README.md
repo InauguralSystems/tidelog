@@ -34,8 +34,10 @@ where it's a deliberate constraint. `FINDINGS.md` is a primary deliverable.
 1. **Format — CBOR (RFC 8949), deterministic-encoding profile.** One canonical
    byte sequence per value. Oracles: the RFC's Appendix A test vectors
    (external/authoritative) and `decode(encode(x)) == x` (round-trip).
-   - [x] unsigned integers (major type 0) — varint/head machinery, >32-bit path
-   - [ ] negative integers, byte/text strings, arrays, maps, simple/float
+   - [x] unsigned + negative integers (major 0/1), >32-bit arithmetic path
+   - [x] byte strings (buffers, NUL-safe) + text strings (str)
+   - [x] arrays, maps (deterministic key order), float64, null
+   - [x] RFC 8949 Appendix A vectors + round-trip + canonical fixed-point
 2. **Store — append-only log-structured KV (Bitcask-style).** Every put/delete
    appends a CBOR record to a log; an in-memory keydir holds the latest offset
    per key; recovery = replay the log.
