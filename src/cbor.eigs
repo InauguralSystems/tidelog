@@ -1,0 +1,113 @@
+# CBOR (RFC 8949) codec — implemented entirely in EigenScript.
+#
+# This is tidelog's serialization foundation: a deterministic byte format with
+# an authoritative external oracle (the RFC's Appendix A test vectors) plus the
+# round-trip property decode(encode(x)) == x. CBOR's "deterministic encoding"
+# profile (RFC 8949 sec 4.2) requires exactly ONE canonical byte sequence per
+# value — every integer takes its shortest form — which makes the format itself
+# a determinism contract, the same property tidelog's store layer will rest on.
+#
+# Encoded data is carried as a LIST of byte integers in [0, 255]. The format
+# layer never touches files or strings, so it sidesteps EigenScript's
+# C-terminated-string / NUL hazard until the store layer bridges to buffers.
+#
+# CBOR's first byte packs a 3-bit major type in the high bits and a 5-bit
+# "additional info" argument in the low bits:
+#     byte = major * 32 + info        (major << 5 | info, expressed in arithmetic)
+# Major types implemented in this slice:
+#   0  unsigned integer
+#
+# THE >32-BIT NOTE: a CBOR argument can be a 64-bit integer. EigenScript's
+# bitwise operators are 32-bit, so multi-byte (de)serialization here uses pure
+# division/modulo arithmetic instead of shifts. Every value stays < 2^53, so
+# `% 256` and `floor(n / 256)` are exact integer ops on doubles. This is the
+# portable, exact way to handle widths the bitwise ops cannot reach. See
+# FINDINGS.md F-CBOR-1.
+
+# --- low-level byte helpers ----------------------------------------------
+
+# Append the k low-order bytes of n to `out`, big-endian (most significant
+# first), via repeated div/mod so no power of 256 is ever materialized.
+define cbor_put_be(out, n, k) as:
+    local tmp is []
+    local rem is n
+    for i in range of k:
+        append of [tmp, rem % 256]
+        rem is floor of (rem / 256)
+    # tmp is little-endian; emit reversed so the stream is big-endian.
+    local j is (len of tmp) - 1
+    loop while j >= 0:
+        append of [out, tmp[j]]
+        j is j - 1
+
+# Read k big-endian bytes starting at pos; return the integer value.
+define cbor_read_be(bytes, pos, k) as:
+    local n is 0
+    for i in range of k:
+        n is n * 256 + bytes[pos + i]
+    return n
+
+# --- argument (head) coding ----------------------------------------------
+
+# Emit a CBOR head: major type + argument `n`, in the shortest (deterministic)
+# form. Used for unsigned ints now, and later for lengths of strings/arrays/maps.
+define cbor_put_head(out, major, n) as:
+    local base is major * 32
+    if n <= 23:
+        append of [out, base + n]
+    elif n <= 255:
+        append of [out, base + 24]
+        cbor_put_be of [out, n, 1]
+    elif n <= 65535:
+        append of [out, base + 25]
+        cbor_put_be of [out, n, 2]
+    elif n <= 4294967295:
+        append of [out, base + 26]
+        cbor_put_be of [out, n, 4]
+    else:
+        append of [out, base + 27]
+        cbor_put_be of [out, n, 8]
+
+# Read a CBOR head's argument given the 5-bit `info` field. Returns [value, pos].
+define cbor_read_arg(bytes, pos, info) as:
+    if info <= 23:
+        return [info, pos]
+    if info == 24:
+        return [cbor_read_be of [bytes, pos, 1], pos + 1]
+    if info == 25:
+        return [cbor_read_be of [bytes, pos, 2], pos + 2]
+    if info == 26:
+        return [cbor_read_be of [bytes, pos, 4], pos + 4]
+    if info == 27:
+        return [cbor_read_be of [bytes, pos, 8], pos + 8]
+    print of "cbor: reserved additional-info"
+    return [0, pos]
+
+# --- public codec ---------------------------------------------------------
+
+# Encode a value to a fresh list of bytes. (This slice: non-negative integers.)
+define cbor_encode(value) as:
+    local out is []
+    cbor_encode_into of [out, value]
+    return out
+
+# Encode `value` by appending its bytes to `out`.
+define cbor_encode_into(out, value) as:
+    # This slice handles unsigned integers only; later slices branch on type.
+    cbor_put_head of [out, 0, value]
+
+# Decode one value from `bytes` starting at `pos`. Returns [value, new_pos].
+define cbor_decode_at(bytes, pos) as:
+    local b is bytes[pos]
+    local major is floor of (b / 32)
+    local info is b % 32
+    pos is pos + 1
+    if major == 0:
+        return cbor_read_arg of [bytes, pos, info]
+    print of "cbor: unsupported major type"
+    return [null, pos]
+
+# Decode a single complete value from a byte list (ignores trailing bytes).
+define cbor_decode(bytes) as:
+    local pair is cbor_decode_at of [bytes, 0]
+    return pair[0]

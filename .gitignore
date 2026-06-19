@@ -1,0 +1,5 @@
+eigs
+*.tape
+*.tdlog
+/tmp_out/
+*.out

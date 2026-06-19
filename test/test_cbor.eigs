@@ -1,0 +1,68 @@
+# CBOR codec tests — RFC 8949 Appendix A vectors + the round-trip property.
+#
+# Two oracles:
+#   1. External: encode(n) must equal the exact bytes the RFC publishes.
+#   2. Internal: decode(encode(n)) == n for every value, including ones whose
+#      shortest form spans 1/2/4/8 bytes (the >32-bit arithmetic path).
+
+load_file of "src/cbor.eigs"
+
+HEXD is ["0","1","2","3","4","5","6","7","8","9","a","b","c","d","e","f"]
+
+define byte_hex(b) as:
+    return HEXD[floor of (b / 16)] + HEXD[b % 16]
+
+define bytes_to_hex(bytes) as:
+    local s is ""
+    for i in range of (len of bytes):
+        s is s + byte_hex of bytes[i]
+    return s
+
+PASS is [0]
+FAIL is [0]
+
+# Oracle 1: deterministic encoding matches the published bytes exactly.
+define expect_hex(n, want) as:
+    local got is bytes_to_hex of cbor_encode of n
+    if got == want:
+        PASS[0] is PASS[0] + 1
+    else:
+        FAIL[0] is FAIL[0] + 1
+        print of ("FAIL enc " + (str of n) + ": got " + got + " want " + want)
+
+# Oracle 2: round-trip through encode then decode.
+define expect_roundtrip(n) as:
+    local back is cbor_decode of cbor_encode of n
+    if back == n:
+        PASS[0] is PASS[0] + 1
+    else:
+        FAIL[0] is FAIL[0] + 1
+        print of ("FAIL roundtrip " + (str of n) + ": got " + (str of back))
+
+# --- RFC 8949 Appendix A: unsigned integers --------------------------------
+expect_hex of [0, "00"]
+expect_hex of [1, "01"]
+expect_hex of [10, "0a"]
+expect_hex of [23, "17"]
+expect_hex of [24, "1818"]
+expect_hex of [25, "1819"]
+expect_hex of [100, "1864"]
+expect_hex of [1000, "1903e8"]
+expect_hex of [1000000, "1a000f4240"]
+expect_hex of [1000000000000, "1b000000e8d4a51000"]
+
+# --- shortest-form boundaries (the determinism profile) --------------------
+expect_hex of [255, "18ff"]
+expect_hex of [256, "190100"]
+expect_hex of [65535, "19ffff"]
+expect_hex of [65536, "1a00010000"]
+expect_hex of [4294967295, "1affffffff"]
+expect_hex of [4294967296, "1b0000000100000000"]
+
+# --- round-trips across all width tiers ------------------------------------
+for v in [0, 1, 23, 24, 100, 255, 256, 1000, 65535, 65536, 1000000, 4294967295, 4294967296, 1000000000000, 9007199254740991]:
+    expect_roundtrip of v
+
+print of ("cbor: " + (str of PASS[0]) + " passed, " + (str of FAIL[0]) + " failed")
+if FAIL[0] > 0:
+    exit of 1
