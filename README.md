@@ -1,5 +1,10 @@
 # tidelog
 
+[![CI](https://github.com/InauguralSystems/tidelog/actions/workflows/tests.yml/badge.svg)](https://github.com/InauguralSystems/tidelog/actions/workflows/tests.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/InauguralSystems/tidelog/badge)](https://securityscorecards.dev/viewer/?uri=github.com/InauguralSystems/tidelog)
+[![tag](https://img.shields.io/github/v/tag/InauguralSystems/tidelog?label=version)](https://github.com/InauguralSystems/tidelog/tags)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A serialization format and a crash-recoverable persistent store, **written
 entirely in EigenScript** — a deliberate stress test of the language on the one
 axis its prior consumer projects never touched: turning live values into durable
@@ -78,5 +83,3 @@ where it's a deliberate constraint. `FINDINGS.md` is a primary deliverable.
 ## Running
 
     ./test/run.sh
-
-Private until EigenScript clears the GitHub Linguist threshold.
