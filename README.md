@@ -83,5 +83,3 @@ where it's a deliberate constraint. `FINDINGS.md` is a primary deliverable.
 ## Running
 
     ./test/run.sh
-
-Private until EigenScript clears the GitHub Linguist threshold.
