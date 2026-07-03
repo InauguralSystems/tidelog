@@ -140,3 +140,24 @@ leave a half-written log. EigenScript's file I/O was create/read/append-only —
 no rename, no delete. Added `rename of [old, new]` (atomic via `rename(2)`) and
 `remove_file of path` (PR #250). Suite 2062/2062, ASan-clean. The fourth
 primitive this port has driven into the language (after #248 ×2, #249).
+
+---
+
+## F-PORT-1 — the I/O contract is complete: byte-unmodified on bare metal — VERIFIED
+
+The strongest test of this findings ledger: EigenOS M10 mounted `src/store.eigs`
++ `src/cbor.eigs` **byte-unmodified** on a bare-metal substrate (a raw ATA block
+device under a script-implemented region layer providing this store's exact I/O
+seam — `read_bytes_buf`, append-mode `write_bytes`, atomic `rename`,
+`file_exists`). Zero new findings: the four primitives this port drove upstream
+(#248 ×2, #249, #250) were *exactly sufficient* — nothing else was missing,
+nothing was worked around.
+
+Re-proven with no OS underneath: recovery-equivalence reopen, the every-offset
+crash-truncation sweep (recovery exact at all byte offsets against the
+committed-record-prefix oracle), compaction (byte-deterministic, through a
+rename whose atomicity the region layer *earns* via double-buffered superblocks
+— `rename(2)` was a POSIX loan; bare metal repaid it), and temporal reads
+reaching behind a machine reboot (`store_get_at` returned a pre-overwrite value
+after power-cycling the guest). One deployment constraint surfaced: store paths
+≤ 12 chars, so the `".compact"` temp name fits the region layer's 20-byte names.
