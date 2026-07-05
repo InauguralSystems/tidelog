@@ -29,5 +29,5 @@ version.
 ## Supported versions
 
 The latest tag on `main` is supported. `tidelog` tracks a pinned EigenScript
-version (see `.devcontainer/Dockerfile`'s `EIGS_REF`, currently v0.21.2); run
+version (see `.devcontainer/Dockerfile`'s `EIGS_REF` for the current pin); run
 against that or newer.
