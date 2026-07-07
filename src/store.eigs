@@ -1,3 +1,4 @@
+# lint: loaded-by ../tidelog.eigs -- module fragment: the entry point loads cbor before store (#460)
 # tidelog store — a log-structured key/value store on top of the CBOR codec.
 #
 # Bitcask-style: the durable state IS an append-only log. Every put/delete
