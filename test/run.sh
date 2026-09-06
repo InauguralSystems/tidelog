@@ -50,11 +50,12 @@ for i in range of (buf_len of buf):
     bb is buf_get of [buf, i]
     out is out + hexd[floor of (bb/16)] + hexd[bb % 16]
 print of out'
-printf '%s\n' "$det_drv" > /tmp/tidelog_det_drv.eigs
-da=$("$EIGS" /tmp/tidelog_det_drv.eigs 2>/dev/null)
-db=$("$EIGS" /tmp/tidelog_det_drv.eigs 2>/dev/null)
+det_drv_file="$(cd "$(dirname "$0")/.." && pwd)/.tidelog_det_drv.eigs"
+printf '%s\n' "$det_drv" > "$det_drv_file"
+da=$("$EIGS" "$det_drv_file" 2>/dev/null)
+db=$("$EIGS" "$det_drv_file" 2>/dev/null)
 if [ -n "$da" ] && [ "$da" = "$db" ]; then echo "PASS: log byte-identical across processes"; else echo "FAIL: store log diverged"; fail=1; fi
-rm -f /tmp/tidelog_det.log /tmp/tidelog_det_drv.eigs
+rm -f /tmp/tidelog_det.log "$det_drv_file"
 
 echo "---"
 if [ "$fail" -eq 0 ]; then echo "ALL PASSED"; else echo "SOME FAILED"; fi
