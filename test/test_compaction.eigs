@@ -54,7 +54,7 @@ ra is store_open of A
 ok of [(snapshot of ra) == before_state, "recovered state == pre-compaction state"]
 ok of [ra.version == 3, "recovered version == live count"]
 ok of [store_get of [ra, "x"] == 3, "recovered x = latest (3)"]
-ok of [store_has of [ra, "z"] == 0, "deleted z stays gone after compaction"]
+ok of [not (store_has of [ra, "z"]), "deleted z stays gone after compaction"]
 
 # the store keeps working after compaction (appends go to the new log)
 store_put of [sa, "v2", 42]
@@ -105,7 +105,7 @@ remove_file of TMP
 store_compact of sc
 rc2 is store_open of C
 ok of [(snapshot of rc2) == crash_state, "crash after swap: compacted log = same state"]
-ok of [file_exists of TMP == 0, "temp consumed by the swap (no leftover)"]
+ok of [not (file_exists of TMP), "temp consumed by the swap (no leftover)"]
 
 print of ("compaction: " + (str of PASS[0]) + " passed, " + (str of FAIL[0]) + " failed")
 if FAIL[0] > 0:
