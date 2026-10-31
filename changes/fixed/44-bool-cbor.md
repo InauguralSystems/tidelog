@@ -1,0 +1,1 @@
+- Preserve booleans through CBOR encoding and durable store recovery (#44).

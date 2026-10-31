@@ -95,6 +95,13 @@ expect_hex of [{"a": "A", "b": "B", "c": "C", "d": "D", "e": "E"}, "a56161614161
 # null
 expect_hex of [null, "f6"]
 
+# booleans are distinct values and use CBOR simple false/true.
+expect_hex of [false, "f4"]
+expect_hex of [true, "f5"]
+expect_hex of [[true, 2], "82f502"]
+expect_roundtrip of false
+expect_roundtrip of true
+
 # deterministic map ordering must NOT depend on insertion order
 expect_hex of [{"b": [2, 3], "a": 1}, "a26161016162820203"]
 # bytewise-of-encoding order: "b" (head 0x61) sorts before "aa" (head 0x62)
@@ -111,7 +118,7 @@ for v in [1.1, 0 - 2.5, 3.141592653589793, 1.0e300, 1.0e-300, 100000.125]:
 for v in ["", "a", "hello, world", "héllo wörld — UTF-8", "IETF"]:
     expect_roundtrip of v
 expect_roundtrip of buf_from_list of [0, 1, 2, 254, 255]
-expect_roundtrip of [1, "two", 3.5, null, [4, 5], {"k": "v"}]
+expect_roundtrip of [1, "two", 3.5, null, true, false, [4, 5], {"k": "v"}]
 expect_roundtrip of {"name": "raft", "term": 0 - 5, "log": [{"idx": 1}, {"idx": 2}], "ratio": 3.14, "done": null}
 
 # a buffer carrying NUL must round-trip byte-for-byte (the store's binary path)
