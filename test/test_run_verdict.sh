@@ -8,13 +8,16 @@ trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 mkdir -p "$TMP/test"
 cp "$ROOT/test/run.sh" "$TMP/test/run.sh"
 printf '# fixture\n' > "$TMP/test/replay.sh"
-for name in cbor store crash_sweep temporal compaction; do
+for name in cbor cbor_unsupported store crash_sweep temporal compaction; do
     printf '# fixture\n' > "$TMP/test/test_$name.eigs"
 done
 
 cat > "$TMP/fake-eigs" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
+  *test_cbor_unsupported.eigs)
+    # run.sh's reject check (#44) expects this one to fail loudly.
+    echo 'cbor: cannot encode type fn' >&2; exit 1 ;;
   *test_temporal.eigs)
     case "${PLANTED_FAILURES:-0}" in
       crash) exit 9 ;;
