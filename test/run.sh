@@ -12,12 +12,23 @@ unit () { # name file
   if [ "$status" -eq 0 ] && printf '%s\n' "$out" | grep -qE ': [0-9]+ passed, 0 failed$'; then
     echo "PASS: $1"
   else
-    echo "FAIL: $1"; printf '%s\n' "$out" | tail -8; fail=1
+    echo "FAIL: $1 (rc=$rc)"; printf '%s\n' "$out" | tail -8; fail=1
+  fi
+}
+
+reject () { # name file marker: command must fail with the expected diagnostic
+  local out rc
+  out="$("$EIGS" "$2" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q -- "$3"; then
+    echo "PASS: $1"
+  else
+    echo "FAIL: $1 (rc=$rc)"; printf '%s\n' "$out" | tail -8; fail=1
   fi
 }
 
 echo "--- format (CBOR / RFC 8949) ---"
 unit "cbor codec" test/test_cbor.eigs
+reject "cbor rejects unsupported values" test/test_cbor_unsupported.eigs "cbor: cannot encode type fn"
 
 echo "--- store (log-structured KV + crash recovery) ---"
 unit "store ops + recovery" test/test_store.eigs

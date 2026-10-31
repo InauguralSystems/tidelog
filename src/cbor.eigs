@@ -9,6 +9,7 @@
 #
 # Value mapping (EigenScript type -> CBOR major type):
 #   none (null)       -> 7 / simple 22 (0xf6)
+#   bool              -> 7 / simple 20/21 (0xf4/0xf5)
 #   num, integer >= 0 -> 0  unsigned integer
 #   num, integer < 0  -> 1  negative integer (-1 - arg)
 #   num, non-integer  -> 7  float64 (0xfb + 8 IEEE-754 bytes)
@@ -21,9 +22,8 @@
 # NUL travels as a buffer (major 2); native strings (major 3) never contain NUL
 # (they are C-terminated), so they round-trip losslessly through str_from_bytes.
 #
-# Booleans: EigenScript has no native bool type (true/false are numeric 1/0), so
-# encoding never emits CBOR simple true/false; decoding maps them to 1/0. Numbers
-# that happen to be integer-valued (e.g. 2.0) encode as integers — in a
+# Booleans are a distinct EigenScript type and map to CBOR simple false/true.
+# Numbers that happen to be integer-valued (e.g. 2.0) encode as integers — in a
 # value model with no int/float distinction, that is the deterministic choice.
 # EigenScript numbers are finite (no NaN/Inf), sidestepping CBOR float
 # canonicalization entirely.
@@ -167,6 +167,11 @@ define cbor_encode_into(out, value) as:
     local t is type of value
     if t == "none":
         append of [out, 7 * 32 + 22]           # 0xf6: null
+    elif t == "bool":
+        if value:
+            append of [out, 7 * 32 + 21]       # 0xf5: true
+        else:
+            append of [out, 7 * 32 + 20]       # 0xf4: false
     elif t == "num":
         cbor_encode_num of [out, value]
     elif t == "str":
@@ -180,7 +185,7 @@ define cbor_encode_into(out, value) as:
     elif t == "dict":
         cbor_encode_map of [out, value]
     else:
-        print of ("cbor: cannot encode type " + t)
+        throw of ("cbor: cannot encode type " + t)
 
 # Encode a value to a fresh list of bytes.
 define cbor_encode(value) as:
@@ -199,9 +204,9 @@ define cbor_decode_at(bytes, pos) as:
 
     if major == 7:
         if info == 20:
-            return [0, pos]                    # false -> 0 (no native bool)
+            return [false, pos]
         if info == 21:
-            return [1, pos]                    # true  -> 1
+            return [true, pos]
         if info == 22:
             return [null, pos]                 # null
         if info == 23:

@@ -110,6 +110,16 @@ re is store_open of E
 ok of [(store_get of [re, "blob"]) == NUL_VAL, "binary value with NUL round-trips"]
 ok of [(store_get of [re, "doc"]) == {"id": 7, "tags": ["a", "b"], "ratio": 0 - 1.25, "nil": null}, "nested doc round-trips"]
 
+# === F. booleans survive append and recovery with their type intact =========
+F is "/tmp/tidelog_store_f.log"
+reset of F
+sf is store_open of F
+store_put of [sf, "yes", true]
+store_put of [sf, "no", false]
+rf is store_open of F
+ok of [(store_get of [rf, "yes"]) == true and (type of (store_get of [rf, "yes"])) == "bool", "true survives recovery as bool"]
+ok of [(store_get of [rf, "no"]) == false and (type of (store_get of [rf, "no"])) == "bool", "false survives recovery as bool"]
+
 print of ("store: " + (str of PASS[0]) + " passed, " + (str of FAIL[0]) + " failed")
 if FAIL[0] > 0:
     exit of 1

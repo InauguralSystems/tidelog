@@ -1,0 +1,9 @@
+# A function is not part of CBOR's value model. Encoding it must throw instead
+# of returning a partial byte sequence with exit status zero.
+load_file of "src/cbor.eigs"
+
+define unsupported_value() as:
+    return null
+
+cbor_encode of unsupported_value
+print of "FAIL: unsupported function was accepted"

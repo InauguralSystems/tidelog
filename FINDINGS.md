@@ -61,12 +61,12 @@ missing primitive, which is added to the language rather than worked around.
 
 ---
 
-## F-CBOR-3 — no native boolean type — CONSTRAINT
+## F-CBOR-3 — native boolean type was omitted by the codec — FIXED
 
-`type of (1 == 1)` is `"num"`; EigenScript has no distinct boolean. The codec
-therefore never emits CBOR simple `true`/`false` (booleans flow through the
-integer path as 1/0); on decode, simple `true`/`false` map to 1/0. Documented so
-a future schema layer doesn't expect a round-trippable bool type. No action.
+On the pinned EigenScript v0.48.0, `type of (1 == 1)` is `"bool"`. The codec's
+missing bool branch silently omitted values and could produce malformed CBOR.
+Booleans now encode as CBOR simple `true`/`false` (`0xf5`/`0xf4`) and decode to
+native booleans. Unsupported types throw rather than emitting partial output.
 
 Related guard: a number is encoded as a CBOR integer only when it is a whole
 number within ±(2^53−1). Larger integer-valued numbers (e.g. `1e300`, where
