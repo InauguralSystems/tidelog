@@ -5,9 +5,11 @@ cd "$(dirname "$0")/.."
 EIGS="${EIGS:-./eigs}"
 fail=0
 
-unit () { # name file marker
-  local out; out="$("$EIGS" "$2" 2>/dev/null)"
-  if printf '%s\n' "$out" | grep -q -- "$3"; then
+unit () { # name file
+  local out status
+  out="$("$EIGS" "$2" 2>&1)"
+  status=$?
+  if [ "$status" -eq 0 ] && printf '%s\n' "$out" | grep -qE ': [0-9]+ passed, 0 failed$'; then
     echo "PASS: $1"
   else
     echo "FAIL: $1"; printf '%s\n' "$out" | tail -8; fail=1
@@ -15,17 +17,17 @@ unit () { # name file marker
 }
 
 echo "--- format (CBOR / RFC 8949) ---"
-unit "cbor codec" test/test_cbor.eigs "0 failed"
+unit "cbor codec" test/test_cbor.eigs
 
 echo "--- store (log-structured KV + crash recovery) ---"
-unit "store ops + recovery" test/test_store.eigs "0 failed"
+unit "store ops + recovery" test/test_store.eigs
 
 echo "--- durable determinism (crash sweep + temporal) ---"
-unit "crash-injection sweep (every byte offset)" test/test_crash_sweep.eigs "0 failed"
-unit "temporal reads (time travel)"               test/test_temporal.eigs   "0 failed"
+unit "crash-injection sweep (every byte offset)" test/test_crash_sweep.eigs
+unit "temporal reads (time travel)"               test/test_temporal.eigs
 
 echo "--- compaction (drop superseded + crash-safe atomic swap) ---"
-unit "compaction"                                 test/test_compaction.eigs "0 failed"
+unit "compaction"                                 test/test_compaction.eigs
 
 echo "--- replay (EIGS_TRACE / EIGS_REPLAY, byte-for-byte) ---"
 replay_ok=1
@@ -33,6 +35,15 @@ for s in 1 7 42 12345 99999; do
   if ! bash test/replay.sh "$s" 80 >/dev/null 2>&1; then echo "FAIL: replay seed=$s"; replay_ok=0; fail=1; fi
 done
 [ "$replay_ok" -eq 1 ] && echo "PASS: replay byte-for-byte (5 seeds x 80 ops)"
+
+if [ "${TIDELOG_SKIP_RUNNER_SELFTEST:-0}" -ne 1 ]; then
+  echo "--- runner verdict self-test ---"
+  if bash test/test_run_verdict.sh; then
+    echo "PASS: runner verdict regression"
+  else
+    echo "FAIL: runner verdict regression"; fail=1
+  fi
+fi
 
 echo "--- determinism (store log, two fresh processes byte-identical) ---"
 det_drv='load_file of "src/cbor.eigs"
