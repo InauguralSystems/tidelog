@@ -1,0 +1,1 @@
+- The test runner now rejects nonzero test exits and requires an exact zero-failure summary (#46).
