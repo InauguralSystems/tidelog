@@ -43,7 +43,9 @@ unit "compaction"                                 test/test_compaction.eigs
 echo "--- replay (EIGS_TRACE / EIGS_REPLAY, byte-for-byte) ---"
 replay_ok=1
 for s in 1 7 42 12345 99999; do
-  if ! bash test/replay.sh "$s" 80 >/dev/null 2>&1; then echo "FAIL: replay seed=$s"; replay_ok=0; fail=1; fi
+  if ! rout="$(bash test/replay.sh "$s" 80 2>&1)"; then
+    echo "FAIL: replay seed=$s"; printf '%s\n' "$rout" | head -n 14; replay_ok=0; fail=1
+  fi
 done
 [ "$replay_ok" -eq 1 ] && echo "PASS: replay byte-for-byte (5 seeds x 80 ops)"
 
@@ -54,6 +56,16 @@ if [ "${TIDELOG_SKIP_RUNNER_SELFTEST:-0}" -ne 1 ]; then
   else
     echo "FAIL: runner verdict regression"; fail=1
   fi
+  if bash test/test_replay_verdict.sh; then
+    echo "PASS: replay verdict regression"
+  else
+    echo "FAIL: replay verdict regression"; fail=1
+  fi
+elif [ -e tidelog.eigs ]; then
+  # The skip is a recursion guard for the self-tests' own fixture trees, which
+  # hold run.sh but not tidelog.eigs. Set on the real tree it would silently
+  # drop the runner self-tests, so there it is a failure, not a skip.
+  echo "FAIL: TIDELOG_SKIP_RUNNER_SELFTEST=1 outside a self-test fixture (runner self-tests not run)"; fail=1
 fi
 
 echo "--- determinism (store log, two fresh processes byte-identical) ---"
