@@ -43,7 +43,9 @@ unit "compaction"                                 test/test_compaction.eigs
 echo "--- replay (EIGS_TRACE / EIGS_REPLAY, byte-for-byte) ---"
 replay_ok=1
 for s in 1 7 42 12345 99999; do
-  if ! bash test/replay.sh "$s" 80 >/dev/null 2>&1; then echo "FAIL: replay seed=$s"; replay_ok=0; fail=1; fi
+  if ! rout="$(bash test/replay.sh "$s" 80 2>&1)"; then
+    echo "FAIL: replay seed=$s"; printf '%s\n' "$rout" | head -n 14; replay_ok=0; fail=1
+  fi
 done
 [ "$replay_ok" -eq 1 ] && echo "PASS: replay byte-for-byte (5 seeds x 80 ops)"
 
@@ -53,6 +55,11 @@ if [ "${TIDELOG_SKIP_RUNNER_SELFTEST:-0}" -ne 1 ]; then
     echo "PASS: runner verdict regression"
   else
     echo "FAIL: runner verdict regression"; fail=1
+  fi
+  if bash test/test_replay_verdict.sh; then
+    echo "PASS: replay verdict regression"
+  else
+    echo "FAIL: replay verdict regression"; fail=1
   fi
 fi
 
