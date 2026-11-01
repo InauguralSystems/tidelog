@@ -61,6 +61,11 @@ if [ "${TIDELOG_SKIP_RUNNER_SELFTEST:-0}" -ne 1 ]; then
   else
     echo "FAIL: replay verdict regression"; fail=1
   fi
+elif [ -e tidelog.eigs ]; then
+  # The skip is a recursion guard for the self-tests' own fixture trees, which
+  # hold run.sh but not tidelog.eigs. Set on the real tree it would silently
+  # drop the runner self-tests, so there it is a failure, not a skip.
+  echo "FAIL: TIDELOG_SKIP_RUNNER_SELFTEST=1 outside a self-test fixture (runner self-tests not run)"; fail=1
 fi
 
 echo "--- determinism (store log, two fresh processes byte-identical) ---"

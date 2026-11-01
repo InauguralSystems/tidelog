@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regression tests for test/replay.sh's verdict (hq#58 TL-REPLAY-1).
+# Regression tests for test/replay.sh's verdict (#49; hq#58 TL-REPLAY-1).
 #
 # replay.sh used to accept any run whose record and replay stdouts were equal:
 # exit codes were never read and stderr went to /dev/null, so a tidelog.eigs that
@@ -8,13 +8,17 @@
 # matched to the reason replay.sh must give, so removing any one check turns its
 # plant green and this test red. The clean control must still pass.
 #
+# The last block plants run.sh itself: a replay.sh that fails must make run.sh
+# fail, and TIDELOG_SKIP_RUNNER_SELFTEST=1 set on a real tree must fail too.
+#
 # Honors $EIGS like run.sh (default ./eigs); the plants run the real runtime.
+# Portable shell only (no GNU sed -i / realpath), so it runs on stock macOS.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 EIGS="${EIGS:-./eigs}"
 case "$EIGS" in
-  */*) REAL=$(cd "$ROOT" && realpath -e -- "$EIGS" 2>/dev/null) ;;
+  */*) REAL=$(cd "$ROOT" && cd "$(dirname -- "$EIGS")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename -- "$EIGS")") ;;
   *)   REAL=$(command -v -- "$EIGS" 2>/dev/null) ;;
 esac
 if [ -z "${REAL:-}" ] || [ ! -x "$REAL" ]; then
@@ -29,6 +33,11 @@ fresh () { # make a clean copy of what replay.sh runs
   cp "$ROOT/test/replay.sh" "$TMP/tree/test/replay.sh"
   cp "$ROOT/tidelog.eigs" "$TMP/tree/tidelog.eigs"
   cp -r "$ROOT/src" "$TMP/tree/src"
+}
+
+edit () { # file cmd...: rewrite file through a filter, in place
+  local f=$1; shift
+  "$@" < "$f" > "$f.new" && mv "$f.new" "$f"
 }
 
 wrapper () { # name body: a fake runtime that wraps the real one
@@ -51,11 +60,11 @@ expect () { # plant runtime reason: replay.sh must exit nonzero naming the reaso
 mkdir -p "$TMP"
 
 # A: crash at line 1 — both runs die identically with empty stdout.
-fresh; sed -i '1i this_function_does_not_exist of 1' "$TMP/tree/tidelog.eigs"
+fresh; edit "$TMP/tree/tidelog.eigs" awk 'NR == 1 { print "this_function_does_not_exist of 1" } { print }'
 expect "A (line-1 crash)" "$REAL" "record run exited nonzero"
 
 # B: throw right after the 'version' line — equal partial stdout.
-fresh; sed -i '/^print of ("version "/a throw of "planted mid-digest throw"' "$TMP/tree/tidelog.eigs"
+fresh; edit "$TMP/tree/tidelog.eigs" awk '{ print } /^print of \("version "/ { print "throw of \"planted mid-digest throw\"" }'
 expect "B (mid-digest throw)" "$REAL" "record run exited nonzero"
 
 # C: full digest printed, then a throw — stdout complete, exit code is the only witness.
@@ -94,5 +103,60 @@ if [ "$status" -eq 0 ] && printf '%s\n' "$out" | grep -qE '^replay: byte-for-byt
 else
   echo "FAIL: replay.sh rejected clean control (status=$status)"
   printf '%s\n' "$out" | tail -6; fail=1
+fi
+
+# run.sh must act on replay.sh's verdict. A fixture tree holds run.sh, a stub
+# replay.sh, and a fake runtime that passes every unit row.
+runtree () { # replay_rc: build the fixture tree; its replay.sh exits replay_rc
+  rm -rf "$TMP/run"; mkdir -p "$TMP/run/test"
+  cp "$ROOT/test/run.sh" "$TMP/run/test/run.sh"
+  for name in cbor cbor_unsupported store crash_sweep temporal compaction; do
+    printf '# fixture\n' > "$TMP/run/test/test_$name.eigs"
+  done
+  printf '#!/usr/bin/env bash\nif [ %s -ne 0 ]; then echo "replay: FAILED — planted (seed=$1)"; exit %s; fi\necho "replay: byte-for-byte identical (seed=$1)"\n' \
+    "$1" "$1" > "$TMP/run/test/replay.sh"
+  cat > "$TMP/run/fake-eigs" <<'FAKE'
+#!/usr/bin/env bash
+case "$1" in
+  *test_cbor_unsupported.eigs) echo 'cbor: cannot encode type fn' >&2; exit 1 ;;
+  *) echo 'fixture: 1 passed, 0 failed' ;;
+esac
+FAKE
+  chmod +x "$TMP/run/fake-eigs"
+}
+runsh () { # run the fixture's run.sh with the self-test recursion guard set
+  (cd "$TMP/run" && TIDELOG_SKIP_RUNNER_SELFTEST=1 EIGS="$TMP/run/fake-eigs" bash test/run.sh 2>&1)
+}
+
+# J: replay.sh exits 1 -> run.sh names the seed, shows the reason, fails.
+runtree 1; out=$(runsh); status=$?
+if [ "$status" -ne 0 ] && printf '%s\n' "$out" | grep -qx 'FAIL: replay seed=1' \
+   && printf '%s\n' "$out" | grep -qxF 'replay: FAILED — planted (seed=1)' \
+   && ! printf '%s\n' "$out" | grep -q '^PASS: replay byte-for-byte' \
+   && printf '%s\n' "$out" | grep -qx 'SOME FAILED'; then
+  echo "PASS: run.sh rejects plant J (replay.sh exits 1)"
+else
+  echo "FAIL: run.sh accepted plant J (replay.sh exits 1; status=$status)"
+  printf '%s\n' "$out" | tail -8; fail=1
+fi
+
+# K: the self-test skip set on a real tree (one holding tidelog.eigs) -> run.sh fails.
+runtree 0; printf '# fixture\n' > "$TMP/run/tidelog.eigs"; out=$(runsh); status=$?
+if [ "$status" -ne 0 ] && printf '%s\n' "$out" | grep -q '^FAIL: TIDELOG_SKIP_RUNNER_SELFTEST=1 outside a self-test fixture' \
+   && printf '%s\n' "$out" | grep -qx 'SOME FAILED'; then
+  echo "PASS: run.sh rejects plant K (self-test skip on a real tree)"
+else
+  echo "FAIL: run.sh accepted plant K (self-test skip on a real tree; status=$status)"
+  printf '%s\n' "$out" | tail -8; fail=1
+fi
+
+# Control: replay.sh exits 0 in a fixture tree -> run.sh passes.
+runtree 0; out=$(runsh); status=$?
+if [ "$status" -eq 0 ] && printf '%s\n' "$out" | grep -qx 'PASS: replay byte-for-byte (5 seeds x 80 ops)' \
+   && printf '%s\n' "$out" | grep -qx 'ALL PASSED'; then
+  echo "PASS: run.sh accepts clean replay control"
+else
+  echo "FAIL: run.sh rejected clean replay control (status=$status)"
+  printf '%s\n' "$out" | tail -8; fail=1
 fi
 exit "$fail"

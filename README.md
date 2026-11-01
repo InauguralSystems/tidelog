@@ -77,6 +77,8 @@ where it's a deliberate constraint. `FINDINGS.md` is a primary deliverable.
     test/test_compaction.eigs compaction + crash-safe swap
     test/replay.sh            EIGS_TRACE/EIGS_REPLAY byte-for-byte oracle
     test/run.sh               full suite (honors $EIGS, default ./eigs)
+    test/test_run_verdict.sh  self-test: run.sh rejects failing unit rows
+    test/test_replay_verdict.sh self-test: replay.sh rejects crashed/empty runs
     eigs                      symlink to the EigenScript binary
     FINDINGS.md               language findings surfaced by the port
 
