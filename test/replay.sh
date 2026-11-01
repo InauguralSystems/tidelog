@@ -40,7 +40,10 @@ fail () { # reason
 [ "$rc1" -eq 0 ] || fail "record run exited nonzero"
 [ "$rc2" -eq 0 ] || fail "replay run exited nonzero"
 head -n 1 "$first" | grep -qE '^version [0-9]+$' || fail "record output does not start with a 'version N' line"
-tail -n 1 "$first" | grep -qE '^log [0-9a-f]+$'  || fail "record output does not end with a 'log <hex>' line (digest incomplete)"
+# Every operation appends a log record, so the digest's hex is non-empty unless
+# the workload ran zero operations: then the store is empty and the line is `log `.
+if [ "$OPS" = 0 ]; then logre='^log $'; else logre='^log [0-9a-f]+$'; fi
+tail -n 1 "$first" | grep -qE "$logre" || fail "record output does not end with a 'log <hex>' line (digest incomplete)"
 
 if ! diff -q "$first" "$second" >/dev/null; then
   echo "replay: FAILED — record vs replay output differs (seed=$SEED ops=$OPS)"

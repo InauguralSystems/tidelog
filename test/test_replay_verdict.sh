@@ -105,6 +105,17 @@ else
   printf '%s\n' "$out" | tail -6; fail=1
 fi
 
+# Control: zero operations leave an empty store, so the digest is a bare `log `
+# line. That complete digest must pass (Codex review on #51).
+fresh
+out=$(EIGS="$REAL" bash "$TMP/tree/test/replay.sh" 12345 0 2>&1); status=$?
+if [ "$status" -eq 0 ] && printf '%s\n' "$out" | grep -qE '^replay: byte-for-byte identical \(seed=12345 ops=0\); tape N-records=[1-9][0-9]* '; then
+  echo "PASS: replay.sh accepts zero-operation control"
+else
+  echo "FAIL: replay.sh rejected zero-operation control (status=$status)"
+  printf '%s\n' "$out" | tail -6; fail=1
+fi
+
 # run.sh must act on replay.sh's verdict. A fixture tree holds run.sh, a stub
 # replay.sh, and a fake runtime that passes every unit row.
 runtree () { # replay_rc: build the fixture tree; its replay.sh exits replay_rc
