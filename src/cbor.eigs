@@ -8,7 +8,7 @@
 # property tidelog's store layer rests on.
 #
 # Value mapping (EigenScript type -> CBOR major type):
-#   none (null)       -> 7 / simple 22 (0xf6)
+#   null              -> 7 / simple 22 (0xf6)
 #   bool              -> 7 / simple 20/21 (0xf4/0xf5)
 #   num, integer >= 0 -> 0  unsigned integer
 #   num, integer < 0  -> 1  negative integer (-1 - arg)
@@ -165,7 +165,7 @@ define cbor_encode_map(out, d) as:
 # Encode `value` by appending its bytes to `out`.
 define cbor_encode_into(out, value) as:
     local t is type of value
-    if t == "none":
+    if value == null:
         append of [out, 7 * 32 + 22]           # 0xf6: null
     elif t == "bool":
         if value:
